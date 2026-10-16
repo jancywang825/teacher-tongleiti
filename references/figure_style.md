@@ -96,3 +96,16 @@ def hidden_edges(points, edges, faces, azim, elev):
 - [ ] 几何图不出现任何线段长度标注（长度只在题干文字中给出）
 - [ ] 顶点字母置于顶点旁、不压点也不压任何棱线（落在图形外侧）
 - [ ] 点更小更细、线更细（3D 顶点 `s≈9`、棱线 `lw≈1.2`）
+
+## 6. 物理 / 化学实景装置图具象化（ImageGen 写实渲染，2026-10-16 新增）
+
+数学的几何 / 函数 / 坐标图维持第 1~5 节的全黑矢量规范（精度与可编辑优先）。物理 / 化学的**实景装置图、生活情境图**（酒精灯、铁架台、烧杯、试管、量筒、天平、SUV、叉车、扫地机器人、灶锅、蒸锅、高压锅等）必须**具象、逼真、一眼可辨实体**，禁止骨架式纯线稿剪影。
+
+**实现方式（首选 ImageGen 写实 / 精细插画）**：
+- 提示词须明确实体名称、视角、比例，例如「white background, realistic illustration of a chemistry lab setup: an iron stand holding a beaker on a wire gauze over an alcohol burner, a thermometer inserted into the beaker with its bulb near the bottom, no text, no numbers, no labels」。
+- 强制「no text, no numbers, no labels」，避免 AI 生成错乱字符；同时「仅含题设条件元素，不出现答案 / 推导结论」（如不标温度读数、不画暗示结论的气泡特写）。
+- 交付高分辨率 PNG + **记录可复现的 ImageGen 提示词**（用户可据提示词重新生成 / 调整）；该情形下**放宽**「全黑线条 / SVG 可编辑 / 参数化脚本」要求，不强制 SVG / 参数化脚本。
+
+**仅在无法使用 ImageGen 时**退化为 matplotlib 精细线稿：加入透视 / 明暗 / 组件细节（玻璃器皿双层壁与高光、温度计刻度与玻璃泡、酒精灯灯帽与火焰、车轮与车身轮廓、叉车货叉等），避免抽象骨架线稿。
+
+**自检新增项**：一眼能否认出图中实体？若仍像抽象符号 / 骨架线，须重画或改用 ImageGen。
