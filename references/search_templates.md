@@ -1,6 +1,6 @@
 # 相似题检索策略与检索词模板
 
-本文件用于 Step 3「检索相似题」。核心原则：**按"知识点 + 方法 + 题型 + 学段"检索，优先找"同知识点或同方法"的题，而非原题本身**。学科网/菁优网多为登录墙，必须按三级回退执行。
+本文件用于 Step 3「检索相似题」。核心原则：**按"知识点 + 方法 + 题型 + 学段"检索，优先找"同知识点或同方法"的题，而非原题本身**。学科网、菁优网均为登录墙站点，**由用户自行提供账号登录**（两站二选一或并用，用哪个取决于用户手头账号；登录与站内检索流程完全一致，见第 1.5 级）。无账号可登录时进入第 2 级通用 WebSearch。必须按三级回退执行。
 
 ## 一、构造检索词（通用模板）
 在检索前，先用 Step 2 得到的标签，拼出 2~3 组检索词。模板：
@@ -23,15 +23,17 @@
 - 学科网搜索入口示例：`https://www.zxxk.com/search/?q=<URL编码的检索词>`（**实测 2026-10：该 URL 返回 404，学科网检索基本不可用，可跳过直接进入第 1.5 级**）
 - 菁优网搜索入口示例：`https://www.jyeoo.com/search?q=<检索词>`（**实测 2026-10：未登录会被重定向回首页，拿不到检索结果**；菁优网按学科有试题检索页如 `https://www.jyeoo.com/math2/ques/search`，但同样需登录）
 - 操作：用 WebFetch 访问搜索结果页，提取题面摘要、知识点、难度。
-- **若返回登录墙/空页/反爬提示/404** → 进入第 1.5 级（登录引导），不要反复重试。
+- **若返回登录墙/空页/反爬提示/404** → 进入第 1.5 级（引导用户登录目标题库站点），不要反复重试。
 
-### 第 1.5 级：引导用户登录菁优网（标准流程，必须主动执行，且登录态持久化）
-> 菁优网题库质量高、按知识点组织，登录后检索价值远大于通用搜索。**遇登录墙时，不要默默跳过**，应主动向用户提供登录引导。用户拒绝则进入第 2 级。
+### 第 1.5 级：引导用户登录目标题库站点（菁优网 / 学科网，流程完全一致）
+> 本 Skill 支持两个高质量题库站点：**菁优网（jyeoo）** 与 **学科网（zxxk）**。具体用哪个由**用户手头账号决定**——有的团队只有学科网账号，就只用学科网；有菁优网账号就用菁优网；二者都有也可并用。**两站登录与站内检索流程完全一致**：持久化 profile、登录一次永久复用、凭据安全红线相同。
+> 下面以菁优网为例写清每一步；**学科网照搬同样步骤**，仅三处不同：profile 路径改为 `~/.workbuddy/zxxk-profile`、入口改为 `https://www.zxxk.com/`（登录后使用站内搜索框，公开搜索 URL 实测 404 但登录后站内检索可用）、搜索框选择器按其实际 `name`/id 调整（清空步骤见"搜索框是追加"小节）。
+> 遇登录墙时**不要默默跳过**，应主动向用户提供登录引导。用户拒绝（无任何站点账号）则进入第 2 级。
 > **核心改造（2026-10 起，解决"登录失败率 90%+"）：改用持久化 Chrome 配置文件，登录一次、永久复用，日常检索可无头运行，彻底告别每次重登与窗口丢失。**
 
 **A. 登录引导（全部实测踩坑结论，照做）：**
 1. **固定使用持久化 profile**（登录态跨运行保留，Cookie/IndexedDB 全部留存，重开浏览器即已登录）：
-   - profile 路径：`~/.workbuddy/jyeoo-profile`（**放在交付文件夹之外**，绝不进 `原创题` 题目产物，避免误提交/外泄）。
+   - profile 路径：菁优网 `~/.workbuddy/jyeoo-profile`、学科网 `~/.workbuddy/zxxk-profile`（**放在交付文件夹之外**，绝不进 `原创题` 题目产物，避免误提交/外泄；两站各用一个独立 profile）。
    - **所有** `agent-browser` 调用都带 `--profile ~/.workbuddy/jyeoo-profile`。
 2. **零手动登录优先（可选，争取一次都不输账号）**：若用户本机 Chrome 已登录菁优网，让其用调试端口重启一次 Chrome（一次性）：
    ```bash
@@ -40,32 +42,32 @@
    ```
    然后抓取并注入到 profile（无需再输账号密码）：
    ```bash
-   agent-browser --auto-connect state save ~/.workbuddy/jyeoo-auth.json
-   agent-browser --profile ~/.workbuddy/jyeoo-profile state load ~/.workbuddy/jyeoo-auth.json
+   agent-browser --auto-connect state save ~/.workbuddy/jyeoo-auth.json   # 学科网则存为 zxxk-auth.json
+   agent-browser --profile ~/.workbuddy/jyeoo-profile state load ~/.workbuddy/jyeoo-auth.json   # 学科网对应 zxxk-profile / zxxk-auth.json
    ```
    注入后打开 jyeoo 即已登录，跳过第 3 步。
 3. **手动登录（零登录失败时的兜底，只需一次）**：启动浏览器必须带 `AGENT_BROWSER_HEADED=true`（整进程可见）＋ `--args "--no-sandbox"`（macOS 沙箱下 Chrome 会静默退出），并带 `--profile`：
    ```bash
    export AGENT_BROWSER_HEADED=true
-   agent-browser --profile ~/.workbuddy/jyeoo-profile open "https://www.jyeoo.com/math/" --args "--no-sandbox"
+   agent-browser --profile ~/.workbuddy/jyeoo-profile open "https://www.jyeoo.com/math/" --args "--no-sandbox"   # 学科网改用 --profile ~/.workbuddy/zxxk-profile 打开 https://www.zxxk.com/
    ```
    - 每次新开 Bash 调用都要重新 `export AGENT_BROWSER_HEADED=true`。
    - 首页在 CDP 下常抓成空白，**改开 `https://www.jyeoo.com/math/` 子页更稳**，可见窗口能正常渲染。
    - 用 `agent-browser snapshot -i` 找登录按钮只开框**不代填**；让用户在本机窗口亲手输入账号/密码/验证码，**不要发到聊天里**。
    - 用户回"已登录"后，`snapshot -i` 确认出现"个人中心/会员/未读消息"等、无"登录/注册"链接。
-4. **凭据安全红线**：账号密码只进用户本机浏览器；严禁写入 Skill、references、记忆、日志或任何文件。`jyeoo-auth.json` / profile 仅存于 `~/.workbuddy/`，等同"本机保持登录"。
+4. **凭据安全红线**：账号密码只进用户本机浏览器；严禁写入 Skill、references、记忆、日志或任何文件。`jyeoo-auth.json` / `zxxk-auth.json` 与 profile 仅存于 `~/.workbuddy/`（两站凭据同等保护），等同"本机保持登录"。
 
-**B. 登录后的站内检索（jyeoo 导航是 JS 驱动的实测结论）：**
-- **检索阶段可无头运行**（已登录的 profile 不需要可见窗口）：`agent-browser --profile ~/.workbuddy/jyeoo-profile open "<搜索页>" --args "--no-sandbox"`（不加 `AGENT_BROWSER_HEADED`，无声无息完成检索）。
-- 直接访问搜索 URL、点导航链接通常**不跳转**；有效路径：首页搜索框 `fill` 关键词 → 点旁边**搜索按钮**提交 → 进入 `math2/ques/search` 结果页。
-- **搜索框是追加不是替换（实测坑）**：`agent-browser type` 对 jyeoo 搜索框会把新词**拼接到旧词后**（如"三棱锥…四棱锥…"），导致检索词污染。连续检索前先用 JS 清空：`agent-browser eval "var i=document.querySelector('input[name=qb]'); i.value=''; i.dispatchEvent(new Event('input',{bubbles:true})); 'ok'"`，再 type 新关键词。
+**B. 登录后的站内检索（以菁优网为例，学科网同理）：**
+- **检索阶段可无头运行**（已登录的 profile 不需要可见窗口）：`agent-browser --profile ~/.workbuddy/jyeoo-profile open "<搜索页>" --args "--no-sandbox"`（学科网换成 zxxk-profile；不加 `AGENT_BROWSER_HEADED`，无声无息完成检索）。
+- 直接访问搜索 URL、点导航链接通常**不跳转**；有效路径：首页搜索框 `fill` 关键词 → 点旁边**搜索按钮**提交 → 进入 `math2/ques/search` 结果页（学科网则用登录后站内搜索框提交，进入其检索结果页）。
+- **搜索框是追加不是替换（实测坑）**：`agent-browser type` 对 jyeoo 搜索框会把新词**拼接到旧词后**（如"三棱锥…四棱锥…"），导致检索词污染。连续检索前先用 JS 清空：`agent-browser eval "var i=document.querySelector('input[name=qb]'); i.value=''; i.dispatchEvent(new Event('input',{bubbles:true})); 'ok'"`，再 type 新关键词。**学科网的搜索框 name/id 不同，先用 `agent-browser eval "document.querySelector('input[type=search],input[name*=search],input[name*=q]')?.name"` 探明选择器再清空**，逻辑相同。
 - 结果页读取：`agent-browser snapshot` 后用 `sed -n 'A,Bp'` 分段读 listitem（每题一个 listitem，含出处链接、题干、难度、组卷/引用数）；`deletion` 标签内是命中关键词的高亮，正文以 StaticText 拼接。结果总数看"共 N 条信息"。
 - 结果页左侧有**知识点筛选项**（如「由一元二次不等式的解求参数」，并显示题量），点击进入可拿到该知识点下全部同源题列表——这是找"不同框架同源题"的最佳入口。
 - 收集素材时重点找**框架不同**的题（如"解集恰含 N 个整数""解集宽度/根的分布""绝对值+二次"），而不是仅换数字的题。
 
 **C. 用毕清理（按需，非必须）：**
 - 默认**保留 profile 登录态**，下次生成直接复用，不再登录（这正是改造目的）。
-- 仅当用户明确要求"退出登录"时：在页面点退出 → `agent-browser --profile ~/.workbuddy/jyeoo-profile close` 关闭。
+- 仅当用户明确要求"退出登录"时：在对应站点页面点退出 → `agent-browser --profile ~/.workbuddy/jyeoo-profile close`（学科网用 zxxk-profile）关闭。
 - **严禁 `close --all`**（会误杀持久化会话配置，正是此前登录态反复丢失、失败率高的根因）。
 - 说明：登录态存于本地 profile，未做任何跨设备持久化/上传。
 
@@ -82,8 +84,8 @@
 
 ### 失败降级与超时（硬规则，实测沉淀）
 - **检索脚本必须带总时限（2026-10-16 实测坑）**：自研 CDP/WS 客户端或浏览器自动化都可能卡死（如 Runtime.evaluate 永不返回）。任何检索脚本外层必须设总超时（建议单次 ≤90s），超时即按"失败 1 次"计数走降级路径，禁止无限等待。
-- **检索失败降级路径（2026-10-16）**：连续 2 次检索尝试失败后，向用户说明并降级到第 2 级 WebSearch 取相似题源；若此前同母题的菁优站内检索结果仍有缓存（如 `/tmp/jyeoo_results*.json`），可作为有效母源库一并使用，溯源节如实注明"本次站内检索未成功，采用 X 日缓存 + Web 检索核验"。
-- **登录失败降级路径（实测经验，2026-10-13）**：菁优网登录态易过期；二维码有效期极短易失效；从本机 Chrome 带 `--remote-debugging-port` 导出 cookie 注入 profile 后 jyeoo 服务端仍不认（会话与 cookie 之外另有服务端绑定）——**不要在这条路上反复消耗**。连续 2 次登录尝试失败后，向用户说明并降级到第 2 级 WebSearch 取相似题源，溯源节如实注明"菁优网站内检索因登录失效未执行，改用 Web 检索"，并建议用户人工核验来源。
+- **检索失败降级路径（2026-10-16）**：连续 2 次检索尝试失败后，向用户说明并降级到第 2 级 WebSearch 取相似题源；若此前同母题的目标站点站内检索结果仍有缓存（如 `/tmp/jyeoo_results*.json` 或 `/tmp/zxxk_results*.json`），可作为有效母源库一并使用，溯源节如实注明"本次站内检索未成功，采用 X 日缓存 + Web 检索核验"。
+- **登录失败降级路径（实测经验，2026-10-13）**：题库站点登录态易过期；二维码有效期极短易失效；从本机 Chrome 带 `--remote-debugging-port` 导出 cookie 注入 profile 后服务端仍不认（会话与 cookie 之外另有服务端绑定）——**不要在这条路上反复消耗**。连续 2 次登录尝试失败后，向用户说明并降级到第 2 级 WebSearch 取相似题源，溯源节如实注明"题库站点站内检索因登录失效未执行，改用 Web 检索"，并建议用户人工核验来源。
 
 ## 三、素材库整理要求
 对每道收集到的相似题，记录：
