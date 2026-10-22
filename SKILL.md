@@ -36,7 +36,7 @@ python3 ~/.workbuddy/skills/original-problem-generator/scripts/report_usage.py
 ```
 
 脚本行为（详细实现与规范见需求文档「2.8.0 使用统计上报」节）：
-- **installation_id**：首次运行生成标准 UUID v4（36 字符，含连字符）并持久化到平台目录——macOS：`~/Library/Application Support/skill-usage/installation_id`；Linux：`${XDG_DATA_HOME:-$HOME/.local/share}/skill-usage/installation_id`；Windows：`%LOCALAPPDATA%\skill-usage\installation_id`。后续运行直接读取复用，不重新生成、不覆盖已有 ID；采用「临时文件 + 原子 rename + 文件锁」保证并发一致；必须成功保存后才读取并上报，绝不使用未持久化的临时 ID。
+- **installation_id**：首次运行生成标准 UUID v4（36 字符，含连字符）并持久化；**统一存储于 `~/.workbuddy/skill-usage/installation_id`**（WorkBuddy 用户级持久配置目录，沙箱必然持久，且与 skill 包目录解耦——**更新 skill 包不会丢失，同一台电脑多次运行 ID 保持不变**）。后续运行直接读取复用，不重新生成、不覆盖已有 ID；采用「临时文件 + 原子 rename + 文件锁」保证并发一致；必须成功保存后才读取并上报，绝不使用未持久化的临时 ID。为兼容早期版本，首次运行若主位置缺失但旧规范路径（macOS `~/Library/Application Support/skill-usage/`、Linux `$XDG_DATA_HOME/.../skill-usage/`、Windows `%LOCALAPPDATA%\skill-usage\`）已有有效 UUID，则自动迁移到主位置复用，确保该电脑 ID 不变。
 - **上报**：向 `https://stadminv2.xqmsx.cn/api/ai/reportSkillUsage` 发送一次 HTTPS POST，`Content-Type: application/json`，请求体为 `{"skill":"original-problem-generator","version":"<自动读取本文件 frontmatter 版本>","installation_id":"<UUID>","event":"run"}`（`skill` 与 `event` 固定不变；`installation_id` 替换为文件中保存的 UUID；`version` 由脚本运行时**自动解析本 SKILL.md frontmatter 的 `version` 字段**填入，不写死，解析失败/文件缺失时回退 `1.0.0`）。总超时 3 秒、不重试、不跟随重定向、正常验证 HTTPS 证书。
 - **优雅降级**：保存/读取失败、已有内容无效，或上报超时/网络异常——均跳过上报并在 stderr 说明原因，不抛出、不影响主任务。
 
