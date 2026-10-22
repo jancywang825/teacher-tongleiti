@@ -31,31 +31,36 @@
 > 遇登录墙时**不要默默跳过**，应主动向用户提供登录引导。用户拒绝（无任何站点账号）则进入第 2 级。
 > **核心改造（2026-10 起，解决"登录失败率 90%+"）：改用持久化 Chrome 配置文件，登录一次、永久复用，日常检索可无头运行，彻底告别每次重登与窗口丢失。**
 
-**A. 登录引导（全部实测踩坑结论，照做）：**
-1. **固定使用持久化 profile**（登录态跨运行保留，Cookie/IndexedDB 全部留存，重开浏览器即已登录）：
-   - profile 路径：菁优网 `~/.workbuddy/jyeoo-profile`、学科网 `~/.workbuddy/zxxk-profile`（**放在交付文件夹之外**，绝不进 `原创题` 题目产物，避免误提交/外泄；两站各用一个独立 profile）。
-   - **所有** `agent-browser` 调用都带 `--profile ~/.workbuddy/jyeoo-profile`。
-2. **零手动登录优先（可选，争取一次都不输账号）**：若用户本机 Chrome 已登录菁优网，让其用调试端口重启一次 Chrome（一次性）：
+**A. 登录引导 —— 【标准流程：二维码扫码登录】（2026-10-21 固化，强制）**
+> ⚠️ **【标准流程 · 强制】无论引导用户登录菁优网还是学科网，统一采用「沙箱内无头浏览器生成登录二维码 → 用户扫码确认 → 我获取并持久化登录态」的方式。** 此方式对**密码登录用户**和**扫码登录用户**都适用——沙箱自己生成二维码，用户无需向我们提供账号密码（扫码场景密码甚至不进沙箱浏览器）。在检索之前、检测到目标站点未登录时，主动启动此流程。
+
+**环境前提与为何不用其他方式（实测，务必先看）**：
+- ❌ **有头手动登录（`AGENT_BROWSER_HEADED=true`）不可用**：WorkBuddy 沙箱内 Chrome 会因 crashpad Mach 端口握手失败而"打开即崩"（exit early），加 `--no-sandbox`/`--disable-crash-reporter`/`MallocNanoZone=0` 等均无效。**不要再用有头窗口让用户输密码。**
+- ❌ **从本机 Chrome 带 `--remote-debugging-port=9222` 导入会话不可用**：沙箱与宿主机的 localhost **网络隔离**——沙箱侧 `curl 127.0.0.1:9222` 与 `agent-browser connect 9222` 均为 connection refused（之前偶发的 502 只是沙箱代理瞎转发，非真连通）。本机 Chrome 即便开了调试端口，沙箱也读不到。**不要再用 debug-port 导入。**
+- ✅ **唯一可靠路径**：在沙箱内**无头** Chrome（`--profile` + `--no-sandbox`，**不加** `AGENT_BROWSER_HEADED`）打开目标站点登录页，由沙箱**自己**渲染并生成登录二维码，导出给用户扫。
+
+**标准流程步骤（二维码扫码登录）**：
+1. **开无头 Chrome + profile 进登录页**（两站各自独立 profile）：
+   - 菁优网：`agent-browser --profile ~/.workbuddy/jyeoo-profile open "https://www.jyeoo.com/math/" --args "--no-sandbox"`（首页 CDP 常抓空白，改开子页更稳；或直抵登录页）。
+   - 学科网：`agent-browser --profile ~/.workbuddy/zxxk-profile open "https://www.zxxk.com/" --args "--no-sandbox"` → 进登录页 `https://sso.zxxk.com/login?service=...`（注意：学科网组卷网 `zujuan.xkw.com/quessearch` 被 WAF 直跳/点击都拦，站内检索改走 `search.zxxk.com/doc` 资料搜索 + 选「高中/试卷」筛选，见 B 节）。
+   - 若 `open` 后上下文空白，用 `agent-browser eval "window.location.href='<登录页URL>';"` 强制导航（沙箱内此方式稳定）。
+2. **定位二维码元素并导出 PNG**（通常是 `<canvas>`，由 JS 绘制；少数站为 `<img>`）：
    ```bash
-   # 用户侧：先退出原 Chrome，再用调试端口启动（仅需一次）
-   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9222
+   agent-browser eval "(()=>{ const cs=[...document.querySelectorAll('canvas')]; const qr=cs.find(c=>c.width>=100&&c.height>=100)||cs[0]; if(!qr) return {err:'no canvas'}; return {dataUrl:qr.toDataURL('image/png'), w:qr.width, h:qr.height}; })()"
    ```
-   然后抓取并注入到 profile（无需再输账号密码）：
-   ```bash
-   agent-browser --auto-connect state save ~/.workbuddy/jyeoo-auth.json   # 学科网则存为 zxxk-auth.json
-   agent-browser --profile ~/.workbuddy/jyeoo-profile state load ~/.workbuddy/jyeoo-auth.json   # 学科网对应 zxxk-profile / zxxk-auth.json
-   ```
-   注入后打开 jyeoo 即已登录，跳过第 3 步。
-3. **手动登录（零登录失败时的兜底，只需一次）**：启动浏览器必须带 `AGENT_BROWSER_HEADED=true`（整进程可见）＋ `--args "--no-sandbox"`（macOS 沙箱下 Chrome 会静默退出），并带 `--profile`：
-   ```bash
-   export AGENT_BROWSER_HEADED=true
-   agent-browser --profile ~/.workbuddy/jyeoo-profile open "https://www.jyeoo.com/math/" --args "--no-sandbox"   # 学科网改用 --profile ~/.workbuddy/zxxk-profile 打开 https://www.zxxk.com/
-   ```
-   - 每次新开 Bash 调用都要重新 `export AGENT_BROWSER_HEADED=true`。
-   - 首页在 CDP 下常抓成空白，**改开 `https://www.jyeoo.com/math/` 子页更稳**，可见窗口能正常渲染。
-   - 用 `agent-browser snapshot -i` 找登录按钮只开框**不代填**；让用户在本机窗口亲手输入账号/密码/验证码，**不要发到聊天里**。
-   - 用户回"已登录"后，`snapshot -i` 确认出现"个人中心/会员/未读消息"等、无"登录/注册"链接。
-4. **凭据安全红线**：账号密码只进用户本机浏览器；严禁写入 Skill、references、记忆、日志或任何文件。`jyeoo-auth.json` / `zxxk-auth.json` 与 profile 仅存于 `~/.workbuddy/`（两站凭据同等保护），等同"本机保持登录"。
+   若返回 `dataUrl`，用 Python 把 base64 解码为 PNG（存工作区临时目录如 `.tmp_<site>/<site>_login_qr.png`，**勿进交付物**）；若返回 `err` 或只有 `<img>`，改用该 `img.src` 下载。
+3. **把二维码 PNG 展示给用户**：用 `present_files` 展示上一步的 PNG，并提示「请用 XXX 网 App 或微信扫码，手机上点确认登录」。说明：此二维码只在沙箱会话内登录，不会影响用户本机已有的该站登录态。
+4. **等待用户扫码确认**：用户回复「已登录 / 已扫」后，验证登录态——`agent-browser eval` 检查页面出现「个人中心 / 会员 / 学校会员 / 用户名」等、无「登录 / 注册」链接；菁优网/学科网首页均会显示会员态。
+5. **持久化登录态**：
+   - 浏览器 profile 目录（`~/.workbuddy/<site>-profile`）已留存 cookie/IndexedDB，重开即已登录；
+   - 另存一份可移植快照：`agent-browser --profile ~/.workbuddy/<site>-profile state save ~/.workbuddy/<site>-auth.json`（仅存 `~/.workbuddy/`，**不得纳入题目交付物**）。
+6. **二维码时效**：通常 1~2 分钟，过期则重生成一张（用户回复「过期」即重跑 2~5 步）。
+
+**凭据安全红线（与标准流程一致）**：账号密码只进用户本机（扫码场景甚至不进沙箱浏览器）；严禁写入 Skill、references、记忆、日志或任何文件。`<site>-auth.json` 与 profile 仅存于 `~/.workbuddy/`（两站凭据同等保护），等同"本机保持登录"。
+
+> 📌 **已废弃 / 不可用的登录方式（明确标记，勿再尝试，避免重复踩坑）**：
+> - ❌ **有头手动登录（`AGENT_BROWSER_HEADED=true` + 用户在弹出窗口输密码）**：WorkBuddy 沙箱内 Chrome 必崩，窗口打开即关，无法完成登录。
+> - ❌ **从本机 Chrome 带 `--remote-debugging-port=9222` 导出 cookie 注入 profile（"零手动登录"）**：沙箱与宿主机 localhost 网络隔离，沙箱侧连不上本机 9222 端口；之前偶发 502 系沙箱代理误转发，非真连通。此路径在 WorkBuddy 环境下不成立。
 
 **B. 登录后的站内检索（以菁优网为例，学科网同理）：**
 - **检索阶段可无头运行**（已登录的 profile 不需要可见窗口）：`agent-browser --profile ~/.workbuddy/jyeoo-profile open "<搜索页>" --args "--no-sandbox"`（学科网换成 zxxk-profile；不加 `AGENT_BROWSER_HEADED`，无声无息完成检索）。
