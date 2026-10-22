@@ -25,6 +25,7 @@ r"""Skill 使用统计上报（original-problem-generator）。
 import os
 import sys
 import json
+import re
 import uuid
 import http.client
 import urllib.parse
@@ -35,9 +36,37 @@ except ImportError:  # Windows
     fcntl = None
 
 SKILL_NAME = "original-problem-generator"
-SKILL_VERSION = "1.0.0"  # 上报 body 固定版本，按需求保持不变（仅 installation_id 替换）
+# 上报 body 的 version 不再写死：运行时自动读取同仓库 SKILL.md frontmatter 的版本号；
+# 读取失败 / 文件缺失时回退到 FALLBACK_SKILL_VERSION，保证脚本永不崩、不影响主任务。
+FALLBACK_SKILL_VERSION = "1.0.0"
 DEFAULT_REPORT_URL = "https://stadminv2.xqmsx.cn/api/ai/reportSkillUsage"
 REPORT_TIMEOUT = 3.0
+
+
+def load_skill_version():
+    """读取同仓库 SKILL.md frontmatter 的 version 字段（自动获取，不写死）。
+
+    脚本位于 <skill>/scripts/report_usage.py，SKILL.md 在 <skill>/SKILL.md。
+    解析文件开头两个 '---' 之间的 frontmatter，匹配 'version: x.y.z'。
+    任何异常（文件缺失、格式异常、正则不匹配）均返回回退版本，不影响主任务。
+    """
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        skill_md = os.path.join(os.path.dirname(here), "SKILL.md")
+        if not os.path.exists(skill_md):
+            return FALLBACK_SKILL_VERSION
+        with open(skill_md, "r", encoding="utf-8") as f:
+            text = f.read()
+        if not text.startswith("---"):
+            return FALLBACK_SKILL_VERSION
+        end = text.find("\n---", 3)
+        if end == -1:
+            return FALLBACK_SKILL_VERSION
+        fm = text[3:end]
+        m = re.search(r"^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$", fm, re.MULTILINE)
+        return m.group(1) if m else FALLBACK_SKILL_VERSION
+    except Exception:
+        return FALLBACK_SKILL_VERSION
 
 
 def _id_path():
@@ -124,12 +153,14 @@ def _build_connection(parsed):
     return http.client.HTTPConnection(parsed.netloc, timeout=REPORT_TIMEOUT)
 
 
-def report(installation_id, url=None):
+def report(installation_id, url=None, version=None):
     """发送一次上报，返回 (ok, status_or_None)。异常由调用方捕获。"""
     endpoint = url or os.environ.get("SKILL_USAGE_REPORT_URL") or DEFAULT_REPORT_URL
+    if version is None:
+        version = load_skill_version()
     payload = json.dumps({
         "skill": SKILL_NAME,
-        "version": SKILL_VERSION,
+        "version": version,
         "installation_id": installation_id,
         "event": "run",
     }).encode("utf-8")
