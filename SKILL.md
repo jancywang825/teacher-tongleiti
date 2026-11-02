@@ -1,6 +1,6 @@
 ---
 name: original-problem-generator
-version: 2.8.0
+version: 2.9.1
 description: 当用户上传题目图片或文件（如说"出原创题 / 变形题 / 改编这道题"）时，自动完成「识别题目 → 检索同知识点/同方法的相似题（学科网、菁优网等，联网+回退）→ 生成知识点与解题方法一致的原创变形题」，并输出含题干、答案、解析、难度、知识点/方法标签与改编说明的完整包。This skill should be used when a teacher or教研用户 wants to turn a classic problem into a consistent variant/original problem.
 trigger_keywords: [原创题, 变形题, 改编, 出一道类似的, 同方法再出一题, 变式, 改编这道题]
 ---
@@ -39,6 +39,7 @@ python3 ~/.workbuddy/skills/original-problem-generator/scripts/report_usage.py
 - **installation_id**：首次运行生成标准 UUID v4（36 字符，含连字符）并持久化；**统一存储于 `~/.workbuddy/skill-usage/installation_id`**（WorkBuddy 用户级持久配置目录，沙箱必然持久，且与 skill 包目录解耦——**更新 skill 包不会丢失，同一台电脑多次运行 ID 保持不变**）。后续运行直接读取复用，不重新生成、不覆盖已有 ID；采用「临时文件 + 原子 rename + 文件锁」保证并发一致；必须成功保存后才读取并上报，绝不使用未持久化的临时 ID。为兼容早期版本，首次运行若主位置缺失但旧规范路径（macOS `~/Library/Application Support/skill-usage/`、Linux `$XDG_DATA_HOME/.../skill-usage/`、Windows `%LOCALAPPDATA%\skill-usage\`）已有有效 UUID，则自动迁移到主位置复用，确保该电脑 ID 不变。
 - **上报**：向 `https://stadminv2.xqmsx.cn/api/ai/reportSkillUsage` 发送一次 HTTPS POST，`Content-Type: application/json`，请求体为 `{"skill":"original-problem-generator","version":"<自动读取本文件 frontmatter 版本>","installation_id":"<UUID>","event":"run"}`（`skill` 与 `event` 固定不变；`installation_id` 替换为文件中保存的 UUID；`version` 由脚本运行时**自动解析本 SKILL.md frontmatter 的 `version` 字段**填入，不写死，解析失败/文件缺失时回退 `1.0.0`）。总超时 3 秒、不重试、不跟随重定向、正常验证 HTTPS 证书。
 - **优雅降级**：保存/读取失败、已有内容无效，或上报超时/网络异常——均跳过上报并在 stderr 说明原因，不抛出、不影响主任务。
+- **构建期新母题事件（需求 §13.1，2.9.1 新增）**：`build_*_docx.py` 末尾经 `review_data.emit_bundle()` 生成评审包时，**自动产生稳定的 `session_id`（= 母题ID，同一母题批次多次重跑复用）**，并以 `event:"new_problem"` 携带 `session_id` 上报一次（复用同一上报接口与 `installation_id` 持久化机制；失败静默）。此与 Step 0 的 `run`（调用量）为不同维度，不重复计数。本地构建/测试可设环境变量 `ORIGINAL_PROBLEM_NO_REPORT=1` 完全禁用上报。
 
 ### Step 1 — 识别题目（M1）
 1. 用 **Read 工具**读取上传的图片（多模态）或直接读取文件文本。
@@ -195,6 +196,57 @@ python3 ~/.workbuddy/skills/original-problem-generator/scripts/report_usage.py
 6. **图文件交付**：合规配图以独立图文件（`.svg` / `.png`）形式产出并嵌入 Word 文档；图内只含条件元素（见 Step 4 配图规则），几何体等核心图禁止只留文字。
 7. **图形脚本交付**：所有条件图的参数化生成脚本统一存放在工作区 `图形脚本/` 文件夹（含「参数区」注释），并在交付说明中告知用户"改参数→重跑脚本→图自动更新"的修改方式。
 
+### Step 6 — 评审交互闭环（2.9.0 · 原创题评审交互平台）
+> 在 Step 5 交付 docx 的同时，构建脚本会**额外写出结构化数据 `原创题_*.json` 与自包含评审页 `原创题__*_评审.html`**（见 11.5 实现要点）。本步闭合"交付 → 反馈 → 优化"回路，不改动既有 2.x 硬约束。
+
+> **数据与渲染说明（重要）**：
+> - **评审数据按 skill 安装层级落盘**：`review_data.py` 的 `SKILL_DATA_DIR` 由脚本自身路径推导——**项目级安装**（`{workspace}/.workbuddy/skills/original-problem-generator/`）时数据落在项目 `.workbuddy` 内，**随项目/团队共享（可纳入 git）**；**用户级安装**（`~/.workbuddy/skills/...`）时仅当前用户私有。两套 build 脚本已改为**优先加载项目级**脚本（回退用户级），确保评审数据落在项目级。
+> - **评审 HTML 公式用原生 MathML**：所有 `$...$` LaTeX 经 `latex2mathml` 转成 `<math>` 元素，浏览器原生渲染、**零外链、完全离线自包含**（不依赖 KaTeX/MathJax CDN）。
+
+**6.1 交付评审包（与 Step 5 同一次构建）**
+- `build_*_docx.py` 末尾调用 `scripts/review_data.py:emit_bundle()`，写出：
+  - `原创题_*.json`：每题含 `id / 标题 / 母题来源 / 题干 / 子问或选项 / 配图相对路径 / 答案 / 解析 / 改编说明 / 创新点 / 难度星级 / 难度锚定表`，外加 `sources`（溯源）、`content_fp`（重命制守卫）等元信息——作为 HTML 与重生成脚本的统一数据源。
+  - `原创题__*_评审.html`：**自包含单文件**（内联 CSS/JS、配图 base64 内嵌、离线可用；LaTeX 公式经**原生 MathML** 渲染、**零外链**），逐题渲染+配图，每题三态勾选（可用/不可用/待定）+ 不可用题独立建议框（自由文本 + 常用标签快捷追加）。
+
+**6.2 能力一 · 选题并重新导出 word（可用题筛选）**
+- 用户在评审 HTML 勾选三态，点「仅导出可用题」→ 浏览器下载 `selection_feedback.json`。
+- 运行 `scripts/regenerate_docx.py --mode filter --data 原创题_*.json --feedback selection_feedback.json --out 精选_*.docx`：基于 JSON 重新生成**只含被选可用题**的新 docx（题号重排、配图/解析/溯源/自检同步裁剪），原全量 docx 不动。
+- 未勾选任何可用题时脚本直接报错退出，禁止产出空文档。
+
+**6.3 能力二 · 逐题建议 + 一键重新生成（不可用题定向优化，2026-10-26 二轮改版）**
+- 用户在不可用题的建议框写建议（命中常用标签则强化对应约束，自由文本则作为该题专属重命制指令）。
+- **「一键重新生成」按钮**（替代原「导出评审结果 JSON」手动导出）：默认禁用，**仅当存在至少一道「不可用」题时可点击**；点击后自动 ① 下载 `selection_feedback.json`（含 `rerun:true`）；② 生成**面向 agent 的重跑消息**并**自动复制到剪贴板**（同时下载 `重跑消息.md`），用户粘贴/发送给使用 skill 的 agent 即触发重跑。
+- **agent 收到重跑消息后的执行顺序（硬要求）**：
+  1. **先更新不可用题的母题源**：对每道不可用题重新走 Step 3 检索（**题源仍仅限菁优网/学科网**），按题源快照机制更新 sources manifest 与实时元数据/指纹；
+  2. **母题更新后**再按该题建议做针对性重命制，把新内容写成 `regenerate_patch.json`（`{题id: {新字段}}`）；
+  3. 运行 `scripts/regenerate_docx.py --mode apply --data 原创题_*.json --patch regenerate_patch.json --out 定向_*.docx`：
+     - **重命制守卫**：被建议题 `content_fp` 必须变化（杜绝换汤不换药），未建议题 `content_fp` 必须不变；命中违规（被建议题指纹未变）则退出码 2 并阻断产出。
+     - 这是与「整批重跑」的关键区别——**未被建议的题保持不动**。
+  4. 重跑完成交付更新后的完整评审包（docx + JSON + 评审 HTML），供下一轮评审。
+
+**6.4 能力三 · 选题规律记录 + skill 自优化**
+- 运行 `scripts/review_stats.py --feedback selection_feedback.json`：
+  - 逐批追加 `selection_log.json`（批次时间戳/总题数/各题状态/各不可用题建议与标签）；
+  - 跨批聚合 `user_patterns.json`（高频弃用原因、高频建议标签、被反复弃用题画像）；
+  - 把高频弃用原因翻译为**可注入 SKILL.md 的约束建议**，写入 `self_opt_proposals.json`（含变更记录，**可解释、可回退**）。
+- **自优化不静默执行**：约束建议由 agent 在**用户确认后**显式修改 SKILL.md 并记入 `user_patterns.json` 的 changelog，用户可否决；严禁脚本直接改写 SKILL.md。
+
+**6.5 能力四 · 周度可用率 + 90%/100% 目标**
+- `review_stats.py` 同时生成 `weekly_report_*.html`：周度可用率（当周可用题数 ÷ 当周全部进入评审题数）、与上周对比、Top 弃用原因、自优化已生效约束项，并以 **matplotlib 趋势折线图（base64 内嵌）** 展示。
+- 北极星指标：可用率逐步逼近 90% → 100%；某周未达预期时优先注入对应 skill 约束。
+- 全部统计持久化于 skill 的 `data/` 目录（**项目级安装即落在 `{workspace}/.workbuddy/skills/original-problem-generator/data/`，团队共享**；用户级安装则落在 `~/.workbuddy/...`，仅当前用户），跨批次累积不丢历史。
+
+**6.6 验收（2.9.0 含二轮优化）**：评审 HTML 正确渲染全部题+配图（配图限最大尺寸约 280×220 等比缩放）、可勾选三态与填写建议；「预览可用题」仅渲染试题不含评审模块，未选择时预览=全部题；「一键重新生成」默认禁用、存在不可用题时才可点击，点击后自动产出 `selection_feedback.json`（含 `rerun:true`）+ 重跑消息（剪贴板+md 备份）；agent 收到消息先更新不可用题母题源（仅限菁优/学科网）再定向重命制；筛选导出 docx 仅含可用题且结构完整；定向重生成后带建议题 `content_fp` 变化、未建议题不变；选中日志与画像正确聚合；周报可用率与趋势图正确；自优化建议有变更记录且可回退。
+
+**6.7 能力五 · 业务事件上报（需求 §13，2.9.1 新增）**
+> 在 6.1~6.6 之外，另向统一上报接口（`POST https://stadminv2.xqmsx.cn/api/ai/reportSkillUsage`，与 Step 0 同址）上报三类业务事件，用于服务端按母题聚合「用户信息 / 可用状态 / 调优」。接口以应答 JSON 的 `code`（0 成功 / 7 失败）判定成败，整请求体上限 **16 KiB**；`installation_id` 为机器 UUID、`session_id` 为母题ID（同一母题批次固定）。
+
+- **`new_problem`（构建期/服务端）**：每次生成新母题原创题时，由 `emit_bundle()` 自动产生稳定 `session_id` 并以 `event:"new_problem"` 上报 `installation_id + session_id`（见 Step 0 说明）。
+- **`available`（客户端经桥接）**：评审 HTML 在**首次点「仅导出可用题」**与**首次点「一键重新生成」**时各按当前勾选**逐题发一条**扁平事件，`info` 为 `{questionID, available:"是"/"否"}`（usable=是，其余=否）；HTML 用 localStorage 按 `session_id` 记忆「已上报」避免重复（服务端不去重）。
+- **`optimize`（客户端经桥接）**：评审 HTML **每次点「一键重新生成」**时，对**每道被标不可用且有建议的题各发一条**扁平事件，`info` 为 `{questionID, text}`（每题 text 裁剪 ≤2000 字；单条事件体通常 <2KiB，远低于 16KiB 守卫）。
+- **投递链路（规避 CORS + 隐私）**：评审页为 `file://`，直接请求上报接口会被跨域拦截且 HTML 不应持有机器 ID。故 HTML 只向**本地桥接 `review_bridge.py` 的 `POST /report`** 发 `{event, session_id, info}`；桥接进程读取持久化 `installation_id`、补全 `skill/version` 后转发后端，并以接口 `code` 判定成败。桥接未启动时上报失败静默，不影响评审。
+- **本地禁用开关**：设环境变量 `ORIGINAL_PROBLEM_NO_REPORT=1` 可完全禁用 `new_problem` 上报（不影响其余流程）。
+
 ## Important constraints
 - **禁止纯数字替换（换皮题）**：不得仅修改系数/解集端点/参数值而保留原题结构与设问不动；必须做 ≥2 类结构性原创改动（情境重构、结构反转、知识嫁接、图形变换）。
 - **题目信息完整与答案完整（硬约束）**：题干引用的每一张图/每一个数据表都必须真实存在并嵌入交付物（写了“数据如下表”“如图丙所示”，则该表/图必须配出，且条件数据与文字完全一致）；解题所需的全部条件（数据、关键数值、装置参数）必须在题面给出，不允许“依赖不存在的图/表才能做”；答案逐问逐空完整，答案中出现的每个数值都要能在题面中找到来源，禁止凭空出现数值。交付前执行“遮答案自检”：遮住答案，仅凭题面（文字＋图＋表）应能独立做出每一问。
@@ -230,3 +282,6 @@ python3 ~/.workbuddy/skills/original-problem-generator/scripts/report_usage.py
 - `references/method_tags.md` — 全科知识点三级结构与各学解法标签、难度标准。
 - `references/search_templates.md` — 检索词模板与学科网/菁优网三级回退策略。
 - `references/output_template.md` — 完整包 Markdown 输出模板与自检清单。
+- `scripts/review_data.py` — 2.9.0 评审平台数据层（JSON schema、自包含评审 HTML 生成、problems→docx 汇编器、content_fp 守卫）。
+- `scripts/regenerate_docx.py` — 2.9.0 筛选导出（--mode filter）/ 定向重生成（--mode apply，含重命制守卫）原文 docx 工具。
+- `scripts/review_stats.py` — 2.9.0 选题日志 + 用户画像 + 周度可用率周报（含趋势图）+ 自优化建议。

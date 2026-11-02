@@ -46,6 +46,8 @@ SKILL_NAME = "original-problem-generator"
 FALLBACK_SKILL_VERSION = "1.0.0"
 DEFAULT_REPORT_URL = "https://stadminv2.xqmsx.cn/api/ai/reportSkillUsage"
 REPORT_TIMEOUT = 3.0
+# 整请求体上限 16 KiB（接口硬性约束，含字段名/内容/空白）
+MAX_PAYLOAD_BYTES = 16384
 
 
 def _id_path():
@@ -192,17 +194,32 @@ def _build_connection(parsed):
     return http.client.HTTPConnection(parsed.netloc, timeout=REPORT_TIMEOUT)
 
 
-def report(installation_id, url=None, version=None):
-    """发送一次上报，返回 (ok, status_or_None)。异常由调用方捕获。"""
+def report(installation_id, url=None, version=None, event="run", session_id=None, info=None):
+    """发送一次上报，返回 (ok, status_or_None, detail)。异常由调用方捕获。
+
+    业务事件扩展（需求 §13）：
+    - event：事件名，由调用方定义；本 skill 使用 run / new_problem / available / optimize
+    - session_id：任务级 UUID（母题ID），可选；不传则后端保存 NULL
+    - info：JSON 对象（调用方定义的业务信息），可选；不传则后端保存 {}
+    应答判定：接口以 JSON 的 `code` 字段标识成功（0 成功 / 7 失败），
+    不能只根据 HTTP 状态码判断——故读取响应体解析 code。
+    """
     endpoint = url or os.environ.get("SKILL_USAGE_REPORT_URL") or DEFAULT_REPORT_URL
     if version is None:
         version = load_skill_version()
-    payload = json.dumps({
+    payload_obj = {
         "skill": SKILL_NAME,
         "version": version,
         "installation_id": installation_id,
-        "event": "run",
-    }).encode("utf-8")
+        "event": event,
+    }
+    if session_id:
+        payload_obj["session_id"] = session_id
+    if info is not None:
+        payload_obj["info"] = info
+    payload = json.dumps(payload_obj, ensure_ascii=False).encode("utf-8")
+    if len(payload) > MAX_PAYLOAD_BYTES:
+        return False, None, "payload 超过 16KiB 上限（%d 字节）" % len(payload)
     parsed = urllib.parse.urlparse(endpoint)
     path = parsed.path or "/"
     if parsed.query:
@@ -215,10 +232,25 @@ def report(installation_id, url=None, version=None):
             headers={"Content-Type": "application/json"},
         )
         resp = conn.getresponse()
-        _ = resp.read()  # 不跟随重定向：遇到 3xx 直接读响应即结束
-        return True, resp.status
+        body = resp.read()  # 不跟随重定向：遇到 3xx 直接读响应即结束
+        # 接口以 JSON 的 code 字段判定成功（0 成功 / 7 失败），HTTP 状态不可靠
+        try:
+            j = json.loads(body.decode("utf-8"))
+            code = j.get("code")
+        except Exception:
+            code = None
+        if code == 0:
+            return True, resp.status, "ok"
+        # HTTP 2xx 但 code 非 0，或无法解析 code：以接口 code 为准
+        return False, resp.status, "code=%s" % code
     finally:
         conn.close()
+
+
+def report_new_problem(installation_id, session_id, url=None, version=None):
+    """业务事件：新母题原创题生成（构建期）。返回 (ok, status, detail)。"""
+    return report(installation_id, url=url, version=version,
+                  event="new_problem", session_id=session_id)
 
 
 def main():
@@ -228,11 +260,11 @@ def main():
         sys.stderr.write("[usage-report] 跳过上报：%s\n" % (err or "未知错误"))
         return 0
     try:
-        ok, status = report(installation_id)
+        ok, status, detail = report(installation_id)
         if ok:
             sys.stderr.write("[usage-report] 上报成功 (HTTP %s)\n" % status)
         else:
-            sys.stderr.write("[usage-report] 上报失败 (HTTP %s)，不影响主任务\n" % status)
+            sys.stderr.write("[usage-report] 上报失败 (%s / HTTP %s)，不影响主任务\n" % (detail, status))
     except Exception as e:  # 任何异常都不影响主任务
         sys.stderr.write("[usage-report] 上报异常：%s，不影响主任务\n" % e)
     return 0
