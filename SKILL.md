@@ -1,6 +1,6 @@
 ---
 name: original-problem-generator
-version: 2.9.3
+version: 2.9.4
 description: 当用户上传题目图片或文件（如说"出原创题 / 变形题 / 改编这道题"）时，自动完成「识别题目 → 检索同知识点/同方法的相似题（学科网、菁优网等，联网+回退）→ 生成知识点与解题方法一致的原创变形题」，并输出含题干、答案、解析、难度、知识点/方法标签与改编说明的完整包。This skill should be used when a teacher or教研用户 wants to turn a classic problem into a consistent variant/original problem.
 trigger_keywords: [原创题, 变形题, 改编, 出一道类似的, 同方法再出一题, 变式, 改编这道题]
 ---
@@ -260,7 +260,7 @@ python3 ~/.workbuddy/skills/original-problem-generator/scripts/report_usage.py
 - 北极星指标：可用率逐步逼近 90% → 100%；某周未达预期时优先注入对应 skill 约束。
 - 全部统计持久化于 skill 的 `data/` 目录（**项目级安装即落在 `{workspace}/.workbuddy/skills/original-problem-generator/data/`，团队共享**；用户级安装则落在 `~/.workbuddy/...`，仅当前用户），跨批次累积不丢历史。
 
-**6.6 验收（2.9.0 含二轮优化）**：评审 HTML 正确渲染全部题+配图（配图限最大尺寸约 280×220 等比缩放）、可勾选三态与填写建议；「预览可用题」仅渲染试题不含评审模块，未选择时预览=全部题；「一键重新生成」默认禁用、存在不可用题时才可点击，点击后自动产出 `selection_feedback.json`（含 `rerun:true`）+ 重跑消息（剪贴板+md 备份）；agent 收到消息先更新不可用题母题源（仅限菁优/学科网）再定向重命制；筛选导出 docx 仅含可用题且结构完整；定向重生成后带建议题 `content_fp` 变化、未建议题不变；选中日志与画像正确聚合；周报可用率与趋势图正确；自优化建议有变更记录且可回退。
+**6.6 验收（2.9.0 含二轮优化）**：评审 HTML 正确渲染全部题+配图（配图限最大尺寸约 280×220 等比缩放）、可勾选三态与填写建议；「预览可用题」仅渲染试题不含评审模块，未选择时预览=全部题；「一键重新生成」始终可点击：未勾选不可用题时点击弹窗提示（禁用态会静默吞掉点击，故不禁用），勾选后才提交重跑队列并自动产出 `selection_feedback.json`（含 `rerun:true`）+ 重跑消息（剪贴板+md 备份）；agent 收到消息先更新不可用题母题源（仅限菁优/学科网）再定向重命制；筛选导出 docx 仅含可用题且结构完整；定向重生成后带建议题 `content_fp` 变化、未建议题不变；选中日志与画像正确聚合；周报可用率与趋势图正确；自优化建议有变更记录且可回退。
 
 **6.7 能力五 · 业务事件上报（需求 §13，2.9.1 新增）**
 > 在 6.1~6.6 之外，另向统一上报接口（`POST https://stadminv2.xqmsx.cn/api/ai/reportSkillUsage`，与 Step 0 同址）上报三类业务事件，用于服务端按母题聚合「用户信息 / 可用状态 / 调优」。接口以应答 JSON 的 `code`（0 成功 / 7 失败）判定成败，整请求体上限 **16 KiB**；`installation_id` 为机器 UUID、`session_id` 为母题ID（同一母题批次固定）。

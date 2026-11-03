@@ -558,7 +558,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <header><h1>__TITLE__ · 原创题评审交互平台</h1>__META__</header>
 <div class="toolbar">
   <button id="btnExport">导出可用题（Word 文档 .docx）</button>
-  <button id="btnRegen" disabled title="需先勾选至少一道「不可用」题">一键重新生成</button>
+  <button id="btnRegen" title="需先勾选至少一道「不可用」题后点击；未勾选时点击会提示">一键重新生成</button>
   <button id="btnPreview" class="sec">预览可用题（仅看题）</button>
   <span class="hint" id="hint"></span>
 </div>
@@ -630,11 +630,10 @@ function download(name,text){
   a.download=name;a.click();URL.revokeObjectURL(a.href);
 }
 function updateRegenBtn(){
-  // 「一键重新生成」仅当存在至少一道「不可用」题时可点击；未选择时不联动（默认全可用=禁用重生成）
+  // 「一键重新生成」始终可点击：未勾选「不可用」时点击会弹窗提示；勾选后才提交重跑队列（禁用态会静默吞掉点击，故不禁用）。
   const has=[...document.querySelectorAll('.card')].some(c=>{
     const pid=c.id.replace('card-','');return getState(pid)==='unusable';});
   const b=document.getElementById('btnRegen');
-  b.disabled=!has;
   b.title=has?'点击后自动生成重跑消息并发送给使用 skill 的 agent（不可用题母题先更新再重跑）'
              :'需先勾选至少一道「不可用」题';
 }
