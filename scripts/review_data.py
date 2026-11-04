@@ -570,7 +570,7 @@ __SOURCES__
 const COMMON_TAGS = __COMMON_TAGS__;
 const META = __BUNDLE_META__;
 const BRIDGE_URL = 'http://127.0.0.1:8787/rerun';  // 本地桥接服务（端口可由 REVIEW_BRIDGE_PORT 覆盖，须与服务端一致）
-const REPORT_URL = 'http://127.0.0.1:8787/report';  // 业务事件上报（available/optimize）经本地桥接转发后端
+const REPORT_URL = 'http://127.0.0.1:8787/report';  // 业务事件上报（available/optimize）经本地桥接转发后端；generate/export 由桥接服务端补报（更可靠）
 const SID = (META.session_id || 'unknown');          // 母题会话 ID（同一母题批次固定）
 const LIMIT = 16384;                                  // 整请求体 16KiB 上限（接口硬约束）
 const BRIDGE_BASE = BRIDGE_URL.split('/rerun')[0];  // 桥接根地址（端口随 REVIEW_BRIDGE_PORT）
@@ -709,7 +709,7 @@ function doExportDocx(){
   hint.textContent='正在生成 Word 文档…';
   fetch(BRIDGE_BASE + '/export-docx',{
     method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({title:'原创题（精选可用题）',problems:picks})
+    body:JSON.stringify({title:'原创题（精选可用题）',problems:picks,session_id:SID})
   })
     .then(r=>{ if(!r.ok) throw new Error('服务返回 '+r.status); return r.blob(); })
     .then(blob=>{

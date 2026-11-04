@@ -34,6 +34,9 @@ import json
 import uuid
 import http.client
 import urllib.parse
+import socket
+import subprocess
+import time
 
 try:
     import fcntl
@@ -253,7 +256,63 @@ def report_new_problem(installation_id, session_id, url=None, version=None):
                   event="new_problem", session_id=session_id)
 
 
+def _ensure_bridge():
+    """上报基础设施自举（best-effort）：若本地桥接 review_bridge.py 未启动则后台拉起。
+
+    评审页按钮事件（generate/export/available/optimize）必须经本地桥接转发后端；桥接
+    默认由本机 launchd 常驻。新机器或同事从 git 拉包后若未配置 launchd，桥接不存活，
+    按钮事件会静默失败。本函数在 Step 0 执行时确保桥接存活，使按钮事件可达后端。
+    任何异常都不影响主任务，绝不阻塞/崩溃；返回 True/False 仅用于自诊断。
+    """
+    port = int(os.environ.get("REVIEW_BRIDGE_PORT", "8787"))
+    # 已监听 → 跳过（launchd 已托管）
+    try:
+        s = socket.socket()
+        s.settimeout(0.4)
+        s.connect(("127.0.0.1", port))
+        s.close()
+        return True
+    except Exception:
+        pass
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        bridge = os.path.join(here, "review_bridge.py")
+        if not os.path.exists(bridge):
+            return False
+        # 继承调用方（agent）的 cwd：桥接默认队列目录 = <cwd>/.workbuddy/rerun_queue，
+        # 与「处理队列」消费目录一致；不强行指定 QUEUE_DIR，避免落盘错位。
+        log = os.path.join(os.path.dirname(here), "review_bridge.auto.log")
+        with open(log, "a") as lf:
+            subprocess.Popen(
+                [sys.executable, bridge],
+                stdout=lf, stderr=lf, stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        # 轮询确认拉起
+        for _ in range(15):
+            time.sleep(0.3)
+            try:
+                s = socket.socket()
+                s.settimeout(0.4)
+                s.connect(("127.0.0.1", port))
+                s.close()
+                return True
+            except Exception:
+                pass
+        return False
+    except Exception:
+        return False
+
+
 def main():
+    # 上报基础设施自举：确保本地桥接存活（best-effort，不影响主任务）。
+    # 评审页按钮事件必须经桥接转发后端；桥接默认由本机 launchd 常驻，新机器/同事从
+    # git 拉包后可能未配置 launchd，导致按钮事件静默失败。先确保桥接存活再上报。
+    try:
+        if _ensure_bridge():
+            sys.stderr.write("[usage-report] 已确保本地桥接存活（按钮事件可达后端）\n")
+    except Exception:
+        pass
     path = _id_path()
     installation_id, err = load_or_create_id(path)
     if err or not installation_id:

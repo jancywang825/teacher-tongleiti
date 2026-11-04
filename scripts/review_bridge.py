@@ -21,6 +21,12 @@ import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
+# 保证同目录的 report_usage 始终可导入（launchd 可能以非 scripts 目录为 cwd 启动，
+# 否则 /report·/rerun·/export-docx 内 import report_usage 会抛 500，按钮事件静默失败）。
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
 PORT = int(os.environ.get("REVIEW_BRIDGE_PORT", "8787"))
 QUEUE_DIR = os.environ.get("REVIEW_QUEUE_DIR") or os.path.join(
     os.getcwd(), ".workbuddy", "rerun_queue")
@@ -69,6 +75,30 @@ def audit_report(event, session_id, info, result):
             f.write(line)
     except Exception:
         pass
+
+
+def _report_event(event, session_id, info=None):
+    """复用 report_usage 向后端上报一条业务事件（installation_id/version 由本进程补全）。
+
+    供 /rerun（generate）、/export-docx（export）等由本服务实际处理的动作使用，
+    使这些动作的上报不依赖前端 fetch /report 是否成功——桥接存活即必到后端。
+    返回 True/False 仅用于自诊断；任何异常都不影响主流程。
+    """
+    try:
+        from report_usage import (load_or_create_id, load_skill_version,
+                                  report as _rep, _id_path)
+    except Exception:
+        return False
+    installation_id, err = load_or_create_id(_id_path())
+    if err or not installation_id:
+        return False
+    try:
+        _rep(installation_id, url=os.environ.get("SKILL_USAGE_REPORT_URL"),
+             version=load_skill_version(), event=event,
+             session_id=session_id, info=info)
+    except Exception:
+        pass
+    return True
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -220,6 +250,13 @@ class Handler(BaseHTTPRequestHandler):
             problems_to_docx(problems, out, title=title, figures_dir=work)
         except Exception as e:  # noqa
             return self._send_json({"accepted": False, "error": "docx build failed: %s" % e}, 500)
+        # 业务事件上报（export）：按钮「导出可用题」的可靠上报（服务端，桥接存活即必到）。
+        # session_id 由前端随导出请求体传入（评审页注入 SID），用于关联母题批次。
+        try:
+            _report_event("export", data.get("session_id") or None,
+                          {"title": title, "count": len(problems)})
+        except Exception:
+            pass
         try:
             with open(out, "rb") as f:
                 blob = f.read()
@@ -264,6 +301,18 @@ class Handler(BaseHTTPRequestHandler):
             path = os.path.join(QUEUE_DIR, "request_%s_%d.json" % (ts, n))
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        # 业务事件上报（generate）：按钮「一键重新生成」的可靠上报（服务端，桥接存活即必到）。
+        # 不依赖前端 fetch /report 是否成功；session_id 取自 data.meta（评审页注入的批次元数据）。
+        try:
+            _report_event(
+                "generate",
+                ((data.get("meta") or {}).get("session_id") or data.get("session_id")),
+                {"request_id": os.path.basename(path),
+                 "unusable": [k for k, v in (data.get("selection") or {}).items()
+                              if v == "unusable"]},
+            )
+        except Exception:
+            pass
         self._send_json({
             "accepted": True,
             "request_id": os.path.basename(path),

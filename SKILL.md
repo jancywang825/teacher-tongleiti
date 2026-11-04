@@ -1,6 +1,6 @@
 ---
 name: original-problem-generator
-version: 2.9.4
+version: 2.9.5
 description: 当用户上传题目图片或文件（如说"出原创题 / 变形题 / 改编这道题"）时，自动完成「识别题目 → 检索同知识点/同方法的相似题（学科网、菁优网等，联网+回退）→ 生成知识点与解题方法一致的原创变形题」，并输出含题干、答案、解析、难度、知识点/方法标签与改编说明的完整包。This skill should be used when a teacher or教研用户 wants to turn a classic problem into a consistent variant/original problem.
 trigger_keywords: [原创题, 变形题, 改编, 出一道类似的, 同方法再出一题, 变式, 改编这道题]
 ---
@@ -268,7 +268,9 @@ python3 ~/.workbuddy/skills/original-problem-generator/scripts/report_usage.py
 - **`new_problem`（构建期/服务端）**：每次生成新母题原创题时，由 `emit_bundle()` 自动产生稳定 `session_id` 并以 `event:"new_problem"` 上报 `installation_id + session_id`（见 Step 0 说明）。
 - **`available`（客户端经桥接）**：评审 HTML 在**首次点「仅导出可用题」**与**首次点「一键重新生成」**时各按当前勾选**逐题发一条**扁平事件，`info` 为 `{questionID, available:"是"/"否"}`（usable=是，其余=否）；HTML 用 localStorage 按 `session_id` 记忆「已上报」避免重复（服务端不去重）。
 - **`optimize`（客户端经桥接）**：评审 HTML **每次点「一键重新生成」**时，对**每道被标不可用且有建议的题各发一条**扁平事件，`info` 为 `{questionID, text}`（每题 text 裁剪 ≤2000 字；单条事件体通常 <2KiB，远低于 16KiB 守卫）。
-- **投递链路（规避 CORS + 隐私）**：评审页为 `file://`，直接请求上报接口会被跨域拦截且 HTML 不应持有机器 ID。故 HTML 只向**本地桥接 `review_bridge.py` 的 `POST /report`** 发 `{event, session_id, info}`；桥接进程读取持久化 `installation_id`、补全 `skill/version` 后转发后端，并以接口 `code` 判定成败。桥接未启动时上报失败静默，不影响评审。
+- **`generate`（服务端经桥接 `/rerun`，2.9.5 新增）**：评审 HTML 点「一键重新生成」提交重跑时，由桥接在收到 `/rerun` 请求后**服务端补报** `event:"generate"`，`info` 为 `{request_id, unusable:[题id...]}`（unusable 为本批被标不可用的题）。该上报在**服务端完成，不依赖前端 fetch /report 是否成功**——桥接存活即必到后端，是「一键生成」上报的可靠主路径。
+- **`export`（服务端经桥接 `/export-docx`，2.9.5 新增）**：评审 HTML 点「导出可用题（Word）」由桥接生成 docx 后，**服务端补报** `event:"export"`，`info` 为 `{title, count}`（count 为导出题数）；前端随导出请求体传入 `session_id` 以关联母题批次。同样在**服务端完成，桥接存活即必到**，是「导出」上报的可靠主路径。
+- **投递链路（规避 CORS + 隐私，2.9.5 强化）**：评审页为 `file://`，直接请求上报接口会被跨域拦截且 HTML 不应持有机器 ID。故 `available`/`optimize` 由 HTML 向**本地桥接 `review_bridge.py` 的 `POST /report`** 发 `{event, session_id, info}`；而 `generate`/`export` 这类「由桥接实际处理」的动作改为**桥接服务端直接补报**，更可靠（前端 fetch 失败也不丢）。桥接进程读取持久化 `installation_id`、补全 `skill/version` 后转发后端，并以接口 `code` 判定成败。**桥接存活前提**：本机由 launchd 常驻；`report_usage.py`（Step 0）现会在执行时自动检测并在桥接未启动时**后台拉起**（best-effort），因此同事从 git 拉包后无需手动配置即可让按钮事件可达后端。桥接彻底不可用时按钮事件失败静默，不影响评审。
 - **本地禁用开关**：设环境变量 `ORIGINAL_PROBLEM_NO_REPORT=1` 可完全禁用 `new_problem` 上报（不影响其余流程）。
 
 ## Important constraints
