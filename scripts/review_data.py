@@ -682,9 +682,10 @@ document.getElementById('btnRegen').onclick=()=>{
   const data=collect();
   const bad=Object.keys(data.selection).filter(k=>data.selection[k]==='unusable');
   if(bad.length===0){alert('请先勾选至少一道「不可用」题。');return;}
-  // 业务事件上报（向本地桥接 /report，桥接转发后端；失败静默）
-  if(!_isReported('avail_regen')){ reportAvailable(); _markReported('avail_regen'); }  // 首次点重生成 → available
-  reportOptimize();                                                                      // 每次点重生成 → optimize
+  // 注意：available/optimize 上报已移至 agent 侧，在用户于 WorkBuddy 发送「发送队列」/「处理队列」
+  // 消费队列时，由服务端（report_review_events.py）经 _ensure_bridge 保证桥接存活后统一上报，
+  // 规避 Windows 桥接未起时浏览器即时上报必败的问题。此处不再即时上报，仅负责把重跑请求送达
+  // （/rerun 或兜底下载 JSON+复制消息），请求本身仍需送达 agent 才能被消费。
   data.rerun=true;        // 标记本反馈用于「母题更新+重跑」
   data.meta=META;         // 附带批次元数据（task/content_fp 等），便于 agent 定位重跑目标
   const payload=JSON.stringify(data);

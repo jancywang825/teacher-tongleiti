@@ -1,6 +1,6 @@
 ---
 name: original-problem-generator
-version: 2.9.6
+version: 2.9.7
 description: 当用户上传题目图片或文件（如说"出原创题 / 变形题 / 改编这道题"）时，自动完成「识别题目 → 检索同知识点/同方法的相似题（学科网、菁优网等，联网+回退）→ 生成知识点与解题方法一致的原创变形题」，并输出含题干、答案、解析、难度、知识点/方法标签与改编说明的完整包。This skill should be used when a teacher or教研用户 wants to turn a classic problem into a consistent variant/original problem.
 trigger_keywords: [原创题, 变形题, 改编, 出一道类似的, 同方法再出一题, 变式, 改编这道题]
 ---
@@ -239,8 +239,10 @@ python3 ~/.workbuddy/skills/original-problem-generator/scripts/report_usage.py
 
 **6.3 能力二 · 逐题建议 + 一键重新生成（不可用题定向优化，2026-10-26 二轮改版）**
 - 用户在不可用题的建议框写建议（命中常用标签则强化对应约束，自由文本则作为该题专属重命制指令）。
-- **「一键重新生成」按钮**（替代原「导出评审结果 JSON」手动导出）：默认禁用，**仅当存在至少一道「不可用」题时可点击**；点击后自动 ① 下载 `selection_feedback.json`（含 `rerun:true`）；② 生成**面向 agent 的重跑消息**并**自动复制到剪贴板**（同时下载 `重跑消息.md`），用户粘贴/发送给使用 skill 的 agent 即触发重跑。
-- **agent 收到重跑消息后的执行顺序（硬要求）**：
+- **「一键重新生成」按钮**（替代原「导出评审结果 JSON」手动导出）：默认禁用，**仅当存在至少一道「不可用」题时可点击**；点击后自动 ① 下载 `selection_feedback.json`（含 `rerun:true`）；② 生成**面向 agent 的重跑消息**并**自动复制到剪贴板**（同时下载 `重跑消息.md`），用户粘贴/发送给使用 skill 的 agent 即触发重跑。**注意（2.9.7 变更）：点击按钮不再即时上报 available/optimize 事件**——上报改由 agent 在消费队列时统一服务端上报（见下方「发送队列」），规避 Windows 桥接未起时浏览器即时上报必败。按钮仍负责把重跑请求可靠送达（/rerun 或兜底下载+粘贴）。
+- **「发送队列」/「处理队列」命令（消费队列 = 服务端上报 + 定向重生成）**：用户在 WorkBuddy 对话中发送「发送队列」（或旧命令「处理队列」，保留兼容）即触发 agent 消费 `.workbuddy/rerun_queue/` 下**顶层** `request_*.json`。agent 执行顺序：
+  - **第 0 步（2.9.7 新增 · 上报）**：先运行 `scripts/report_review_events.py`——它自动 `_ensure_bridge()` 拉起桥接、逐题**服务端**上报 `available`/`optimize`（桥接存活即必到，不再依赖浏览器）、并按队列项 `reported` 标记**幂等**防重复（同一队列项多次触发只上报一次）。`available`/`optimize` 由此从「浏览器点击即时」改为「agent 消费队列时服务端上报」，是 Windows 下可靠的统一上报点。
+- **agent 消费队列后的重生成执行顺序（硬要求，承接上方第 0 步上报）**：
   1. **先更新不可用题的母题源**：对每道不可用题重新走 Step 3 检索（**题源仍仅限菁优网/学科网**），按题源快照机制更新 sources manifest 与实时元数据/指纹；
   2. **母题更新后**再按该题建议做针对性重命制，把新内容写成 `regenerate_patch.json`（`{题id: {新字段}}`）；
   3. 运行 `scripts/regenerate_docx.py --mode apply --data 原创题_*.json --patch regenerate_patch.json --out 定向_*.docx`：
@@ -266,11 +268,11 @@ python3 ~/.workbuddy/skills/original-problem-generator/scripts/report_usage.py
 > 在 6.1~6.6 之外，另向统一上报接口（`POST https://stadminv2.xqmsx.cn/api/ai/reportSkillUsage`，与 Step 0 同址）上报三类业务事件，用于服务端按母题聚合「用户信息 / 可用状态 / 调优」。接口以应答 JSON 的 `code`（0 成功 / 7 失败）判定成败，整请求体上限 **16 KiB**；`installation_id` 为机器 UUID、`session_id` 为母题ID（同一母题批次固定）。
 
 - **`new_problem`（构建期/服务端）**：每次生成新母题原创题时，由 `emit_bundle()` 自动产生稳定 `session_id` 并以 `event:"new_problem"` 上报 `installation_id + session_id`（见 Step 0 说明）。
-- **`available`（客户端经桥接）**：评审 HTML 在**首次点「仅导出可用题」**与**首次点「一键重新生成」**时各按当前勾选**逐题发一条**扁平事件，`info` 为 `{questionID, available:"是"/"否"}`（usable=是，其余=否）；HTML 用 localStorage 按 `session_id` 记忆「已上报」避免重复（服务端不去重）。
-- **`optimize`（客户端经桥接）**：评审 HTML **每次点「一键重新生成」**时，对**每道被标不可用且有建议的题各发一条**扁平事件，`info` 为 `{questionID, text}`（每题 text 裁剪 ≤2000 字；单条事件体通常 <2KiB，远低于 16KiB 守卫）。
+- **`available`（服务端经桥接，2.9.7 改为服务端）**：原由评审 HTML 在「一键重新生成」/「仅导出可用题」点击时浏览器即时上报；**2.9.7 起，`available` 改由 agent 在消费队列（「发送队列」/「处理队列」）时经 `scripts/report_review_events.py` 服务端上报**（逐题一条，`info` 为 `{questionID, available:"是"/"否"}`，usable=是其余=否），桥接经 `_ensure_bridge` 保证存活、按队列项 `reported` 标记幂等。**「仅导出可用题」按钮仍保留浏览器侧即时上报**（同机桥接存活时生效，作为补充路径；Windows 桥接未起则导出上报同样会失败，按 Q2 本期不改）。
+- **`optimize`（服务端经桥接，2.9.7 改为服务端）**：**2.9.7 起改为 agent 消费队列时经 `report_review_events.py` 服务端上报**——对每道被标不可用且有建议的题各发一条扁平事件，`info` 为 `{questionID, text}`（每题 text 裁剪 ≤2000 字；单条事件体通常 <2KiB，远低于 16KiB 守卫）。不再依赖浏览器点击时桥接存活。
 - **`generate`（服务端经桥接 `/rerun`，2.9.5 新增）**：评审 HTML 点「一键重新生成」提交重跑时，由桥接在收到 `/rerun` 请求后**服务端补报** `event:"generate"`，`info` 为 `{request_id, unusable:[题id...]}`（unusable 为本批被标不可用的题）。该上报在**服务端完成，不依赖前端 fetch /report 是否成功**——桥接存活即必到后端，是「一键生成」上报的可靠主路径。
 - **`export`（服务端经桥接 `/export-docx`，2.9.5 新增）**：评审 HTML 点「导出可用题（Word）」由桥接生成 docx 后，**服务端补报** `event:"export"`，`info` 为 `{title, count}`（count 为导出题数）；前端随导出请求体传入 `session_id` 以关联母题批次。同样在**服务端完成，桥接存活即必到**，是「导出」上报的可靠主路径。
-- **投递链路（规避 CORS + 隐私，2.9.5 强化，2.9.6 补构建期桥接自举）**：评审页为 `file://`，直接请求上报接口会被跨域拦截且 HTML 不应持有机器 ID。故 `available`/`optimize` 由 HTML 向**本地桥接 `review_bridge.py` 的 `POST /report`** 发 `{event, session_id, info}`；而 `generate`/`export` 这类「由桥接实际处理」的动作改为**桥接服务端直接补报**，更可靠（前端 fetch 失败也不丢）。桥接进程读取持久化 `installation_id`、补全 `skill/version` 后转发后端，并以接口 `code` 判定成败。**桥接存活前提（2.9.6 加固）**：除本机 launchd 常驻、`report_usage.py`（Step 0）自动检测并后台拉起外，**`emit_bundle()` 在构建期产出评审 HTML 之前也会调用 `_ensure_bridge()` 拉起桥接**——这是比 Step 0 更可靠的入口（只要构建了评审页，桥接必在 HTML 出现前启动；避免仅依赖 Step 0、或打开历史 HTML 时无桥接，导致四个事件静默失败）。`available`/`optimize` 的 fetch 与两个按钮的兜底分支新增**可见横幅提示**（桥接未运行时页面左下角红字「本地桥接未运行…」，8 秒后消失、同会话只提示一次），不再静默吞错。桥接彻底不可用时按钮事件失败但页面有提示，不影响评审。
+- **投递链路（规避 CORS + 隐私，2.9.5 强化，2.9.6 补构建期桥接自举，2.9.7 available/optimize 转服务端）**：评审页为 `file://`，直接请求上报接口会被跨域拦截且 HTML 不应持有机器 ID。`generate`/`export` 这类「由桥接实际处理」的动作由**桥接服务端直接补报**，最可靠（前端 fetch 失败也不丢）；`available`/`optimize` **2.9.7 起改为 agent 消费队列时经 `report_review_events.py` 服务端上报**（不再由 HTML fetch /report），原因是 Windows 上桥接因 Job Object 回收无常驻而必死，浏览器点击时上报必然静默失败，而 agent 运行环境可 `_ensure_bridge` 拉起桥接，是稳定上报点。桥接进程读取持久化 `installation_id`、补全 `skill/version` 后转发后端，并以接口 `code` 判定成败。**桥接存活前提（2.9.6 加固）**：除本机 launchd 常驻、`report_usage.py`（Step 0）自动检测并后台拉起外，**`emit_bundle()` 在构建期产出评审 HTML 之前也会调用 `_ensure_bridge()` 拉起桥接**；2.9.7 的 `report_review_events.py` 在消费队列上报前同样调用 `_ensure_bridge()`，三重保障。`available`/`optimize` 的「仅导出可用题」按钮仍保留浏览器 fetch /report + 可见横幅提示（桥接未运行时页面左下角红字，8 秒后消失、同会话只提示一次）作为补充路径；但其主上报路径已转服务端，Windows 下不再依赖浏览器桥接。
 - **本地禁用开关**：设环境变量 `ORIGINAL_PROBLEM_NO_REPORT=1` 可完全禁用 `new_problem` 上报（不影响其余流程）。
 
 ## Important constraints
