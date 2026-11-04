@@ -1,0 +1,8 @@
+# 运行时产物（由桥接/构建在 cwd 下生成，随安装位置不同，不进 skill 包）
+.workbuddy/
+__pycache__/
+*.pyc
+*.log
+.DS_Store
+review_bridge.auto.log
+data/

@@ -580,12 +580,28 @@ const PROBLEMS = __PROBLEMS_JS__;
 function _rk(k){return k+'_'+SID;}
 function _isReported(k){try{return localStorage.getItem(_rk(k))==='1';}catch(e){return false;}}
 function _markReported(k){try{localStorage.setItem(_rk(k),'1');}catch(e){}}
+function bridgeWarn(msg){
+  // 桥接未运行时给出可见提示（避免按钮事件静默失败无从察觉）；8 秒后自动消失，且同会话只提示一次。
+  try{
+    if(localStorage.getItem('bridge_warn_shown')==='1') return;
+    localStorage.setItem('bridge_warn_shown','1');
+    const b=document.createElement('div');
+    b.style.cssText='position:fixed;left:12px;bottom:12px;max-width:360px;z-index:9999;'
+      +'background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:8px;'
+      +'padding:10px 12px;font:13px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;'
+      +'box-shadow:0 2px 8px rgba(0,0,0,.12)';
+    b.textContent='⚠️ '+msg;
+    document.body.appendChild(b);
+    setTimeout(()=>{ if(b.parentNode) b.parentNode.removeChild(b); }, 8000);
+  }catch(e){}
+}
 function reportEvent(event, info){
-  // 向本地桥接 POST 业务事件；桥接补全 installation_id 后转发后端。失败静默（不影响评审）。
+  // 向本地桥接 POST 业务事件；桥接补全 installation_id 后转发后端。
   const payload=JSON.stringify({event:event, session_id:SID, info:info});
   if(payload.length>LIMIT) return; // 超 16KiB 直接丢弃（调用方已做裁剪守卫）
   fetch(REPORT_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:payload})
-    .then(r=>r.json()).then(()=>{}).catch(()=>{});
+    .then(r=>r.json()).then(()=>{})
+    .catch(()=>{ bridgeWarn('本地桥接未运行，按钮事件未上报（请在 WorkBuddy 中重新运行本技能以拉起桥接）'); });
 }
 function reportAvailable(){
   // available 事件：每题一条事件，扁平 info={questionID, available}（usable=是，其余=否）
@@ -688,6 +704,7 @@ document.getElementById('btnRegen').onclick=()=>{
       const msg=buildRerunMsg(data);
       copyText(msg);
       download('重跑消息.md',msg);
+      bridgeWarn('本地桥接未运行，重生成请求未送达（已下载 JSON + 复制消息兜底）。请在 WorkBuddy 中重新运行本技能以拉起桥接。');
       document.getElementById('hint').textContent=
         '⚠️ 桥接服务未启动（'+err.message+'）：已下载 selection_feedback.json 并复制重跑消息到剪贴板，请在对话中发送「处理队列」，我将立即处理。';
     });
@@ -719,6 +736,7 @@ function doExportDocx(){
     .catch(err=>{
       // 桥接未启动 / 导出失败 → 退化导出 JSON（保留原能力，绝不静默失败）
       download(String(META.task||'原创题').split('/').join('_')+'_原创题生成.json', JSON.stringify({exported_at:new Date().toISOString(),problems:picks},null,2));
+      bridgeWarn('本地桥接未运行，导出 Word 请求未送达（已退化为导出 JSON）。请在 WorkBuddy 中重新运行本技能以拉起桥接。');
       hint.textContent='⚠️ 导出 Word 失败（'+(err&&err.message||err)+'）：已退化为导出 JSON，请确认桥接服务已启动。';
     });
 }
@@ -963,6 +981,14 @@ def emit_bundle(bundle, out_dir, stem_name):
     返回 (json_path, html_path, session_id)。
     """
     os.makedirs(out_dir, exist_ok=True)
+    # 桥接自举（best-effort，不影响主任务）：评审页按钮事件须经本地桥接转发后端；
+    # 构建期是评审 HTML 出现的唯一可靠入口，在此确保桥接存活，避免仅依赖 Step0、
+    # 或打开历史 HTML 时无桥接导致 generate/export/available/optimize 静默失败。
+    try:
+        from report_usage import _ensure_bridge as _ensure_bridge_local
+        _ensure_bridge_local()
+    except Exception:
+        pass
     json_path = os.path.join(out_dir, stem_name + ".json")
     html_path = os.path.join(out_dir, stem_name + "_评审.html")
     # session_id：稳定复用（同一母题批次多次重跑共用），不在 bundle 内则读/写 sidecar
