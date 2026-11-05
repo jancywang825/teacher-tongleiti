@@ -1,6 +1,6 @@
 ---
 name: original-problem-generator
-version: 2.9.7
+version: 2.10.1
 description: 当用户上传题目图片或文件（如说"出原创题 / 变形题 / 改编这道题"）时，自动完成「识别题目 → 检索同知识点/同方法的相似题（学科网、菁优网等，联网+回退）→ 生成知识点与解题方法一致的原创变形题」，并输出含题干、答案、解析、难度、知识点/方法标签与改编说明的完整包。This skill should be used when a teacher or教研用户 wants to turn a classic problem into a consistent variant/original problem.
 trigger_keywords: [原创题, 变形题, 改编, 出一道类似的, 同方法再出一题, 变式, 改编这道题]
 ---
@@ -13,6 +13,8 @@ trigger_keywords: [原创题, 变形题, 改编, 出一道类似的, 同方法�
 > 文中涉及的具体工具（如 `agent-browser`、`latex2mathml`/`mathml2omml`、`~/.workbuddy/jyeoo-profile`）均以 **WorkBuddy** 为例；在其他平台上，请替换为该平台对应的浏览器/检索工具与 Python 依赖，逻辑不变。
 
 # 原创题生成（Original Problem Generator）
+
+> **⚠️ 流程确定性原则（2.10.0 核心改造，跨机器/跨会话强制一致）**：本 skill 的交付流程**不依赖模型是否幻觉**——所有机械产出步骤（Step 0 上报、R2 溯源闸门、docx/OMML、评审 HTML、JSON、content_fp 守卫，**2.10.1 起含 R1 配图质检**）已收口为**唯一交付入口 `scripts/run_pipeline.py`**。模型只做三件事：① 识别母题与数学命制；② 选溯源通道（Step 3.0）；③ 准备结构化 JSON（**含为引用图的题目配好 `figure`**）并**调用 `run_pipeline.py`**。**模型不得手写 docx 构建代码、不得把 `.md` 当主交付物**——任何未经 `run_pipeline.py` 产出的交付（如纯 md 完整包）均视为流程未完成。详见「Step 5 唯一交付入口」与需求文档「15. 流程确定性改造（R0–R3）」「16. 强制配图（2.10.1）」。
 
 ## Overview
 教研场景中，教师常需把经典题改写成"变形题 / 原创题"，核心约束是**保持知识点与解题方法一致**，仅改变数据、情境、图形或设问。本 Skill 把这一过程标准化：识别上传题 → 检索同知识点/同方法的相似题作为素材 → 在素材基础上生成一致性原创题，并交付"完整包"。
@@ -27,7 +29,7 @@ trigger_keywords: [原创题, 变形题, 改编, 出一道类似的, 同方法�
 ## Workflow（严格三步 + 输出）
 
 ### Step 0 — 使用统计上报（执行前必跑，失败不影响主任务）
-> **本 skill 每次执行时，最先运行一次使用统计上报**，再进入 Step 1。该步骤纯标准库、跨平台、失败绝不阻断后续流程（脚本始终以退出码 0 结束，也不发送 body 之外的任何数据）。
+> **本 skill 每次执行时，最先运行一次使用统计上报**，再进入 Step 1。该步骤纯标准库、跨平台、失败绝不阻断后续流程（脚本始终以退出码 0 结束，也不发送 body 之外的任何数据）。**若经 `run_pipeline.py` 交付（2.10.0 默认路径），Step 0 的 `run` 上报已内置在该脚本内，无需单独执行本步。**
 
 用 python3 执行本 skill 目录下的上报脚本（用户级路径示例，若放在项目级 `.workbuddy/skills/` 则用对应路径）：
 
@@ -211,14 +213,19 @@ python3 ~/.workbuddy/skills/original-problem-generator/scripts/report_usage.py
     - **图上标注题目信息（硬约束）：物化配图（含写实实景图）已用 PIL 叠加题给符号/数值/引出线标注，标注只含条件无答案？**
      - 数据/情境自洽、答案可独立推导验证（遮住答案，仅凭题面条件应能独立做出每一问）？
 
-### Step 5 — 输出完整包（M5）
-1. 按 `references/output_template.md` 的「原创题卡片」结构输出。
-2. 包含：原题回显（核对）、知识点/方法标签、相似题参考（溯源）、原创题（题干+答案+解析+改编说明）。
-3. 用户要求"多道变式"时，并列 2~3 个变体，全部保持相同知识点与方法，仅切入点不同。
-4. 如实标注来源，第 3 级回退须显式写"未联网核验，建议人工核对"。
-5. **交付格式（默认 Word 文档）**：最终交付物默认生成 **`.docx`（Word）**，其中 LaTeX 公式转换为 **Word 原生公式（OMML）**，保证在任何 Word/WPS 环境直接显示为排版公式（而非裸 `$...$` 代码）。转换管线：`latex2mathml` → `mathml2omml` → `python-docx` 插入 `<m:oMath>`。`.md`（LaTeX 源）仅作可选附件，不作主交付物——普通查看器不渲染 md 内的 LaTeX。
-6. **图文件交付**：合规配图以独立图文件（`.svg` / `.png`）形式产出并嵌入 Word 文档；图内只含条件元素（见 Step 4 配图规则），几何体等核心图禁止只留文字。
-7. **图形脚本交付**：所有条件图的参数化生成脚本统一存放在工作区 `图形脚本/` 文件夹（含「参数区」注释），并在交付说明中告知用户"改参数→重跑脚本→图自动更新"的修改方式。
+### Step 5 — 输出完整包（M5）· 经 `run_pipeline.py` 交付（2.10.0 确定性改造）
+> **唯一交付入口（硬约束）**：本步**不再**由模型手写 docx，而是把已命制的题目数据以**结构化 JSON**喂给 `scripts/run_pipeline.py`，由该脚本统一产出全部交付物。模型不得手写 docx 构建代码、不得把 `.md` 当主交付物（纯 md 完整包视为流程未完成）。
+
+1. **准备交付输入 JSON**（模型产出，字段契约见 `scripts/run_pipeline.py` 顶部 docstring）：`stem_name`（必填）、`problems`（必填，每题 `{id,title,stem,subquestions?,options?,figure?,answer,analysis[],adaptation,innovation,difficulty_anchor,source?}`）、`mother`（母题识别：`{subject,text,figure?}`）、`channel`（`jyeoo`/`zxxk`/`websearch`）、`sources`（通道为站点时必填，每源含 `sid/url`+`fingerprint/content_fp`）、`fetch_time`、`task`、`figures_dir`。
+2. **调用唯一交付入口**（用户级路径示例，项目级安装用对应路径）：
+   ```bash
+   python3 ~/.workbuddy/skills/original-problem-generator/scripts/run_pipeline.py --input <交付输入.json> --out-dir <交付目录>
+   ```
+   脚本内部串行执行：① Step 0 上报（`run`）→ ② **R2 溯源闸门**（站点通道强制 `sources` 含 `sid`+`指纹`，缺失即**拒绝构建**；websearch 强制各题标注"未联网核验，建议人工核对"，缺失则告警）→ ③ 构建 docx（母题原图嵌入 + 各题 LaTeX→OMML 原生公式）→ ④ `emit_bundle` 写出评审 HTML + JSON + 构建期 `new_problem` 上报 + 桥接自举 → ⑤ **R1 交付硬门**（断言 docx + 评审HTML + JSON(`content_fp`) 三件套齐全且一致、OMML 无 CJK/命令残留、母图已内嵌；任一缺失即退出码非 0，**绝不宣布完成**）→ ⑥ 清理中间产物。
+3. **交付格式（由 `run_pipeline.py` 产出，默认 Word 文档）**：最终交付物为 **`.docx`（Word，公式 OMML 原生）** + **`原创题_*.json`** + **`原创题__*_评审.html`**（自包含、MathML 离线渲染）。`.md` **不得作为主交付物**——普通查看器不渲染 md 内 LaTeX；如需文档化附件可另行导出，但不得替代 docx。
+4. **图文件交付（强制配图 · 2.10.1 新增）**：**任何题，只要题干条件中出现"如图""见下图""图中"等引用图的表述，则必须配图**（每题 JSON 带 `figure` 字段并指向真实图片文件）；**几何类、物理类、化学类试题尤甚**——这几类题目即使题干未显式写"如图"，只要题意依赖图形（图形/装置/示意图），命制时也**必须主动配图**，不得只留文字描述。合规配图以独立 `.png`/`.svg` 产出，`run_pipeline.py` 的 **R1 配图质检**会校验：① 题干含上述引用图表述却缺 `figure` → 拒绝交付；② 已声明 `figure` 但图片文件未就绪 → 拒绝交付。图内只含条件元素（见 Step 4 配图规则），几何体等核心图禁止只留文字。
+5. **图形脚本交付（保留）**：条件图的参数化生成脚本仍由模型产出并存入工作区 `图形脚本/` 文件夹（含「参数区」注释），`run_pipeline.py` 仅负责把生成好的 PNG/SVG 暂存嵌入——脚本本身不生成图形。
+6. 用户要求"多道变式"时，并列 2~3 个变体，全部保持相同知识点与方法，仅切入点不同；如实标注来源，websearch 回退须显式写"未联网核验，建议人工核对"。
 
 ### Step 6 — 评审交互闭环（2.9.0 · 原创题评审交互平台）
 > 在 Step 5 交付 docx 的同时，构建脚本会**额外写出结构化数据 `原创题_*.json` 与自包含评审页 `原创题__*_评审.html`**（见 11.5 实现要点）。本步闭合"交付 → 反馈 → 优化"回路，不改动既有 2.x 硬约束。
